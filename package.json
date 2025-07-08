@@ -1,0 +1,26 @@
+{
+    "$schema": "./@types/schema/package/index.json",
+    "package_version": 2,
+    "name": "single_html",
+    "version": "1.0.0",
+    "author": "hubluesky",
+    "editor": ">=3.8.2",
+    "scripts": {
+        "preinstall": "node ./scripts/preinstall.js",
+        "build": "tsc"
+    },
+    "title": "i18n:single_html.title",
+    "description": "i18n:single_html.description",
+    "contributions": {
+        "builder": "./dist/builder.js"
+    },
+    "dependencies": {
+        "fs-extra": "^10.0.0",
+        "lzma": "^2.3.2"
+    },
+    "devDependencies": {
+        "@cocos/creator-types": "^3.8.2",
+        "@types/fs-extra": "^5.0.4",
+        "@types/node": "^18.17.1"
+    }
+}
