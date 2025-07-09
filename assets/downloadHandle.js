@@ -314,7 +314,6 @@ System.register("chunks:///downloadHandle.js", [], (function () {
     default: downloadText,
   };
 
-  // 如果有打datajs
   cc.assetManager.downloader.register(downloaders);
 
   if (window.wasmMap != null) {

@@ -8,23 +8,7 @@ const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const txtSuffixes = ['.txt', '.xml', '.vsh', '.fsh', '.atlas', '.tmx', '.tsx', '.json', '.ExportJson', '.plist', '.fnt', '.rt', '.mtl', '.pmtl', '.prefab', '.log'];
 const scriptSuffixes = ['.js', '.effect', 'chunk'];
-function copyDirSync(src, dest, recursive = true) {
-    if (!fs_1.default.existsSync(dest))
-        fs_1.default.mkdirSync(dest, { recursive: true });
-    const filenames = fs_1.default.readdirSync(src);
-    for (const filename of filenames) {
-        const subSrcFilename = path_1.default.join(src, filename);
-        const subDestFilename = path_1.default.join(dest, filename);
-        const stat = fs_1.default.statSync(subSrcFilename);
-        if (stat.isFile()) {
-            fs_1.default.copyFileSync(subSrcFilename, subDestFilename);
-        }
-        else if (recursive && stat.isDirectory()) {
-            copyDirSync(subSrcFilename, subDestFilename, recursive);
-        }
-    }
-}
-function readFilesSync(filePath) {
+function walkFilesSync(filePath) {
     const files = fs_1.default.readdirSync(filePath, { withFileTypes: true });
     const filenames = [];
     for (const file of files) {
@@ -32,13 +16,28 @@ function readFilesSync(filePath) {
         if (file.isFile())
             filenames.push(newFilePath);
         else if (file.isDirectory())
-            filenames.push(...readFilesSync(newFilePath));
+            filenames.push(...walkFilesSync(newFilePath));
     }
     return filenames;
 }
+function packWasmFiles(dirname) {
+    const targetPathAssetsLength = `${dirname}/`.length;
+    const filenames = walkFilesSync(dirname);
+    const assets = {};
+    for (const filename of filenames) {
+        const key = filename.replace(/\\/g, `/`).slice(targetPathAssetsLength);
+        const suffix = path_1.default.extname(filename);
+        if (suffix == ".wasm") {
+            const data = fs_1.default.readFileSync(filename);
+            assets[key] = Buffer.from(data).toString("base64");
+        }
+    }
+    const assetsText = JSON.stringify(assets);
+    return `window.wasmMap = ${assetsText}`;
+}
 function packAssets(src, dest) {
     const targetPathAssetsLength = `${dest}/`.length;
-    const filenames = readFilesSync(src);
+    const filenames = walkFilesSync(src);
     const assets = {};
     for (const filename of filenames) {
         const key = filename.replace(/\\/g, `/`).slice(targetPathAssetsLength);
@@ -52,128 +51,107 @@ function packAssets(src, dest) {
         }
     }
     const assetsText = JSON.stringify(assets);
-    fs_1.default.writeFileSync(dest + "/assets.js", `window.assetsMap = ${assetsText}`, "utf8");
+    return `window.assetsMap = ${assetsText}`;
 }
-function packWasmFiles(src, dest) {
-    const targetPathAssetsLength = `${dest}/`.length;
-    const filenames = readFilesSync(src);
-    const assets = {};
-    for (const filename of filenames) {
-        const key = filename.replace(/\\/g, `/`).slice(targetPathAssetsLength);
-        const suffix = path_1.default.extname(filename);
-        if (suffix == ".wasm") {
-            const data = fs_1.default.readFileSync(filename);
-            assets[key] = Buffer.from(data).toString("base64");
-        }
-    }
-    const assetsText = JSON.stringify(assets);
-    fs_1.default.writeFileSync(dest + "/wasmAssets.js", `window.wasmMap = ${assetsText}`, "utf8");
-}
-function appendChunkJs(js, importName) {
+function updateSystemJsSign(js, importName) {
     return js.replace(`System.register([`, `System.register("chunks:///${importName}",[`);
 }
-function packChunkJs(filename, chunkName, callback) {
-    let data = fs_1.default.readFileSync(filename, { encoding: "utf8" });
-    data = appendChunkJs(data, chunkName);
-    if (callback)
-        data = callback(data);
-    fs_1.default.writeFileSync(filename, data, "utf8");
+function removeAllComments(html) {
+    return html.replace(/<!--[\s\S]*?-->/g, "").replace(/\n\s*\n/g, '\n');
 }
-function packApplicationJs(filename) {
-    packChunkJs(filename, "application.js", (data) => {
-        data = data.replace(`src/settings.json`, "");
-        data = data.replace(`src/effect.bin`, "");
-        data = data.replace(`cc = engine;`, `
-    cc = engine;
-    System.import("chunks:///downloadHandle.js");
-    cc.settings._settings = window.cocosSettings;
-    // cc.effectSettings._data = ArrayBuffer;
-    `);
-        return data;
+function removeAllScriptTags(html) {
+    return html.replace(/<script.*?>[\s\S]*?<\/script>/g, "");
+}
+function packCssFile(html, buildDir) {
+    // 1. 内联 <link rel="stylesheet">
+    return html.replace(/<link[^>]+href="([^"]+\.css)"[^>]*>/g, (_, cssPath) => {
+        const fullPath = path_1.default.join(buildDir, cssPath);
+        if (fs_1.default.existsSync(fullPath)) {
+            const css = fs_1.default.readFileSync(fullPath, 'utf-8');
+            return `<style>\n${css}\n</style>`;
+        }
+        return '';
     });
 }
-function packSettingsConfig(inputName, outputName) {
-    let data = fs_1.default.readFileSync(inputName, { encoding: "utf8" });
-    let cocosSettings = JSON.parse(data);
+function insertScriptTag(content, type) {
+    return `\n<script${type ? ` type="${type}"` : ""} charset="utf-8">\n${content}\n</script>`;
+}
+function insertScriptTagFromFile(filename, chunkName, type) {
+    let content = fs_1.default.readFileSync(filename, "utf8");
+    content = updateSystemJsSign(content, chunkName !== null && chunkName !== void 0 ? chunkName : path_1.default.basename(filename));
+    return insertScriptTag(content, type);
+}
+function insertScriptTagFromDir(dirname) {
+    const filenames = walkFilesSync(dirname);
+    let html = "";
+    for (let filename of filenames)
+        html += insertScriptTagFromFile(filename);
+    return html;
+}
+function insertImportMapTag(filename) {
+    let content = fs_1.default.readFileSync(filename, { encoding: "utf8" });
+    content = content.replace(`./../cocos-js/cc.js`, "chunks:///cc.js");
+    return insertScriptTag(content, "systemjs-importmap");
+}
+function insertSettingsConfigTag(filename, buildDir) {
+    let content = fs_1.default.readFileSync(filename, { encoding: "utf8" });
+    let cocosSettings = JSON.parse(content);
     if (cocosSettings.splashScreen != null) {
         cocosSettings.splashScreen.totalTime = 0;
         if (cocosSettings.splashScreen.logo != null)
             cocosSettings.splashScreen.logo.base64 = "";
     }
-    fs_1.default.writeFileSync(outputName, `cocosSettings=${JSON.stringify(cocosSettings)}`, "utf8");
-    fs_1.default.rmSync(inputName);
-    return cocosSettings.scripting.scriptPackages;
-}
-function packCocosJsFile(outPath, dirName, packScripts) {
-    const dirents = fs_1.default.readdirSync(`${outPath}/${dirName}`, { withFileTypes: true });
-    for (const dirent of dirents) {
-        const filename = `${dirName}/${dirent.name}`;
-        if (dirent.isFile()) {
-            const extname = path_1.default.extname(filename);
-            const filePath = `${outPath}/${filename}`;
-            switch (extname) {
-                case ".js":
-                    let data = fs_1.default.readFileSync(filePath, { encoding: "utf8" });
-                    data = appendChunkJs(data, dirent.name);
-                    fs_1.default.writeFileSync(filePath, data, "utf8");
-                    packScripts.push(filename);
-                    break;
-                case ".wasm":
-                    const wasmData = fs_1.default.readFileSync(filePath);
-                    const wasmText = Buffer.from(wasmData).toString("base64");
-                    fs_1.default.rmSync(filePath);
-                    const wasmKey = filename.replace("cocos-js/", ""); // 去掉cocos-js路径
-                    fs_1.default.writeFileSync(filePath + ".js", `if(window.wasmMap==null) window.wasmMap = {}; window.wasmMap["${wasmKey}"]="${wasmText}";`, "utf8");
-                    packScripts.push(filename + ".js");
-                    break;
-            }
-        }
-        else if (dirent.isDirectory()) {
-            packCocosJsFile(outPath, filename, packScripts);
-        }
+    let html = insertScriptTag(`cocosSettings=${JSON.stringify(cocosSettings)}`);
+    for (let script of cocosSettings.scripting.scriptPackages) {
+        let chunksFilename = script.replace("../", "");
+        html += insertScriptTagFromFile(path_1.default.join(buildDir, chunksFilename), chunksFilename);
     }
+    return html;
 }
-function packScriptFiles(filename, chunks) {
-    let data = fs_1.default.readFileSync(filename, { encoding: "utf8" });
-    data = appendChunkJs(data, chunks);
-    fs_1.default.writeFileSync(filename, data, "utf8");
-}
-function packScriptPackages(outPath, scriptPackages) {
-    for (let script of scriptPackages) {
-        let chunks = script.replace("../", "");
-        packScriptFiles(path_1.default.join(outPath, "/temp", script), chunks);
+function insertCocosJsDirTag(dirname) {
+    const filenames = walkFilesSync(dirname);
+    let html = "";
+    for (let filename of filenames) {
+        if (path_1.default.extname(filename) == ".js")
+            html += insertScriptTagFromFile(filename);
     }
+    return html;
 }
-function packIndexHtml(filename, importmapPath, scriptPackages) {
-    let data = fs_1.default.readFileSync(filename, { encoding: "utf8" });
-    let importmapData = fs_1.default.readFileSync(importmapPath, { encoding: "utf8" });
-    // 这两行会导致仓库有可以引入.png
-    data = data.replace(`<!--<link rel="apple-touch-icon" href=".png" />-->`, "");
-    data = data.replace(`<!--<link rel="apple-touch-icon-precomposed" href=".png" />-->`, "");
-    let scripts = "";
-    console.log("scriptPackages", scriptPackages);
-    for (let script of scriptPackages)
-        scripts += `<script src="${script.replace("../", "")}" charset="utf-8"> </script>\n`;
-    data = data.replace(`<!-- packages scripts -->`, `${scripts}`);
-    const importmapNewData = importmapData.replace(`./../cocos-js/cc.js`, "chunks:///cc.js");
-    data = data.replace(`<script type="systemjs-importmap" charset="utf-8"></script>`, `<script type="systemjs-importmap" charset="utf-8">
-  ${importmapNewData}
-  </script>`);
-    fs_1.default.writeFileSync(filename, data, "utf8");
+function insertApplicationTag(filename) {
+    let content = insertScriptTagFromFile(filename);
+    content = content.replace(`src/settings.json`, "");
+    content = content.replace(`src/effect.bin`, "");
+    content = content.replace(`cc = engine;`, `
+    cc = engine;
+    System.import("chunks:///downloadHandle.js");
+    cc.settings._settings = window.cocosSettings;
+    // cc.effectSettings._data = ArrayBuffer;
+    `);
+    return content;
 }
-function packSingleHtml(outPath) {
-    packAssets(path_1.default.join(outPath, "assets"), outPath);
-    packWasmFiles(path_1.default.join(outPath, "cocos-js"), outPath);
-    packChunkJs(`${outPath}/index.js`, "index.js");
-    packApplicationJs(`${outPath}/application.js`);
-    copyDirSync(`${path_1.default.dirname(__dirname)}/assets`, `${outPath}`, false);
-    const scriptPackages = packSettingsConfig(`${outPath}/src/settings.json`, `${outPath}/src/settings.js`);
-    const importmapPath = `${outPath}/src/import-map.json`;
-    packScriptPackages(outPath, scriptPackages);
-    const cocosJsScripts = [];
-    packCocosJsFile(outPath, "cocos-js", cocosJsScripts);
-    packIndexHtml(`${outPath}/index.html`, importmapPath, [...cocosJsScripts, ...scriptPackages]);
-    fs_1.default.rmSync(importmapPath);
-    fs_1.default.rmdirSync(`${outPath}/assets`, { recursive: true });
+function packSingleHtml(buildDir) {
+    const wasmText = packWasmFiles(path_1.default.join(buildDir, "cocos-js"));
+    let htmlTags = insertScriptTag(wasmText);
+    const assetsText = packAssets(path_1.default.join(buildDir, "assets"), buildDir);
+    htmlTags += insertScriptTag(assetsText);
+    htmlTags += insertScriptTagFromFile(path_1.default.join(buildDir, "src", "polyfills.bundle.js"));
+    htmlTags += insertScriptTagFromFile(path_1.default.join(buildDir, "src", "system.bundle.js"));
+    htmlTags += insertSettingsConfigTag(path_1.default.join(buildDir, "src", "settings.json"), buildDir);
+    htmlTags += insertImportMapTag(path_1.default.join(buildDir, "src", "import-map.json"));
+    htmlTags += insertCocosJsDirTag(path_1.default.join(buildDir, "cocos-js"));
+    htmlTags += insertScriptTagFromDir(path_1.default.join(path_1.default.dirname(__dirname), "assets"));
+    htmlTags += insertApplicationTag(path_1.default.join(buildDir, "application.js"));
+    htmlTags += insertScriptTagFromFile(path_1.default.join(buildDir, "index.js"));
+    // polyfills脚本在内嵌以后，会导致System不会自动import，需要手动import一下。
+    htmlTags += insertScriptTag("System.import(\"cc\", \"chunks:///cc.js\");\nSystem.import(\"chunks:///index.js\");");
+    const indexHtmlPath = path_1.default.join(buildDir, 'index.html');
+    let html = fs_1.default.readFileSync(indexHtmlPath, 'utf-8');
+    html = removeAllScriptTags(html);
+    html = removeAllComments(html);
+    html = packCssFile(html, buildDir);
+    html = html.slice(0, html.lastIndexOf('</body>'));
+    html += htmlTags;
+    html += `\n</body>\n</html>`;
+    fs_1.default.writeFileSync(`${buildDir}/indexMerge.html`, html, "utf8");
 }
 exports.packSingleHtml = packSingleHtml;

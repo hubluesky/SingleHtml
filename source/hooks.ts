@@ -53,7 +53,6 @@ export const onAfterCompressSettings: BuildHook.onAfterCompressSettings = async 
 };
 
 export const onAfterBuild: BuildHook.onAfterBuild = async function (options: ITaskOptions, result: IBuildResult) {
-    fs.copyFileSync(Editor.Project.path + "/build-templates/playable/index.html", `${result.dest}/index.html`);
     packSingleHtml(result.dest);
     console.log(`${PACKAGE_NAME}_onAfterBuild`, result.dest);
 };

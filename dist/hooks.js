@@ -68,7 +68,6 @@ const onAfterCompressSettings = function (options, result) {
 exports.onAfterCompressSettings = onAfterCompressSettings;
 const onAfterBuild = function (options, result) {
     return __awaiter(this, void 0, void 0, function* () {
-        fs_1.default.copyFileSync(Editor.Project.path + "/build-templates/playable/index.html", `${result.dest}/index.html`);
         (0, packSingleHtml_1.packSingleHtml)(result.dest);
         console.log(`${global_1.PACKAGE_NAME}_onAfterBuild`, result.dest);
     });
