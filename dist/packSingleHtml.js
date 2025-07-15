@@ -1,4 +1,13 @@
 "use strict";
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -6,6 +15,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.packSingleHtml = void 0;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
+const lzma_1 = require("lzma");
+const xxtea_node_1 = require("xxtea-node");
 const txtSuffixes = ['.txt', '.xml', '.vsh', '.fsh', '.atlas', '.tmx', '.tsx', '.json', '.ExportJson', '.plist', '.fnt', '.rt', '.mtl', '.pmtl', '.prefab', '.log'];
 const scriptSuffixes = ['.js', '.effect', 'chunk'];
 function walkFilesSync(filePath) {
@@ -73,85 +84,132 @@ function packCssFile(html, buildDir) {
         return '';
     });
 }
-function insertScriptTag(content, type) {
-    return `\n<script${type ? ` type="${type}"` : ""} charset="utf-8">\n${content}\n</script>`;
+// function insertScriptTag(content: string, type?: string) {
+//   return `\n<script${type ? ` type="${type}"` : ""} charset="utf-8">\n${content}\n</script>`;
+// }
+function uint8ToUtf16(u8arr) {
+    var _a;
+    let result = '';
+    for (let i = 0; i < u8arr.length; i += 2) {
+        const code = (u8arr[i] << 8) | ((_a = u8arr[i + 1]) !== null && _a !== void 0 ? _a : 0);
+        result += String.fromCharCode(code);
+    }
+    return result;
+}
+function xxteaEncryptBytes(data, key) {
+    const encrypted = (0, xxtea_node_1.encrypt)(data, Buffer.from(key));
+    return new Uint8Array(encrypted);
+}
+function compressAndEncrypt(content, key = "default-xxtea-key") {
+    return __awaiter(this, void 0, void 0, function* () {
+        return new Promise((resolve, reject) => {
+            const inputBytes = Buffer.from(content, 'utf-8');
+            (0, lzma_1.compress)(inputBytes, 1, (lzmaBytes, error) => {
+                if (error)
+                    return reject(error);
+                const encrypted = xxteaEncryptBytes(lzmaBytes, key);
+                const utf16Str = uint8ToUtf16(encrypted);
+                resolve(utf16Str);
+            });
+        });
+    });
+}
+function insertScriptTag(content, key = "default-xxtea-key") {
+    return __awaiter(this, void 0, void 0, function* () {
+        const utf16 = yield compressAndEncrypt(content, key);
+        return `<script type="application/xxtea-lzma-utf16" charset="utf-16" data-decrypt="true">\n${utf16}\n</script>`;
+    });
 }
 function insertScriptTagFromFile(filename, chunkName, type) {
     let content = fs_1.default.readFileSync(filename, "utf8");
     content = updateSystemJsSign(content, chunkName !== null && chunkName !== void 0 ? chunkName : path_1.default.basename(filename));
     return insertScriptTag(content, type);
 }
-function insertScriptTagFromDir(dirname) {
-    const filenames = walkFilesSync(dirname);
-    let html = "";
-    for (let filename of filenames)
-        html += insertScriptTagFromFile(filename);
-    return html;
-}
+// async function insertScriptTagFromDir(dirname: string): Promise<string> {
+//   const filenames = walkFilesSync(dirname);
+//   let html = "";
+//   for (let filename of filenames)
+//     html += await insertScriptTagFromFile(filename);
+//   return html;
+// }
 function insertImportMapTag(filename) {
     let content = fs_1.default.readFileSync(filename, { encoding: "utf8" });
     content = content.replace(`./../cocos-js/cc.js`, "chunks:///cc.js");
     return insertScriptTag(content, "systemjs-importmap");
 }
 function insertSettingsConfigTag(filename, buildDir) {
-    let content = fs_1.default.readFileSync(filename, { encoding: "utf8" });
-    let cocosSettings = JSON.parse(content);
-    if (cocosSettings.splashScreen != null) {
-        cocosSettings.splashScreen.totalTime = 0;
-        if (cocosSettings.splashScreen.logo != null)
-            cocosSettings.splashScreen.logo.base64 = "";
-    }
-    let html = insertScriptTag(`cocosSettings=${JSON.stringify(cocosSettings)}`);
-    for (let script of cocosSettings.scripting.scriptPackages) {
-        let chunksFilename = script.replace("../", "");
-        html += insertScriptTagFromFile(path_1.default.join(buildDir, chunksFilename), chunksFilename);
-    }
-    return html;
+    return __awaiter(this, void 0, void 0, function* () {
+        let content = fs_1.default.readFileSync(filename, { encoding: "utf8" });
+        let cocosSettings = JSON.parse(content);
+        if (cocosSettings.splashScreen != null) {
+            cocosSettings.splashScreen.totalTime = 0;
+            if (cocosSettings.splashScreen.logo != null)
+                cocosSettings.splashScreen.logo.base64 = "";
+        }
+        let html = yield insertScriptTag(`cocosSettings=${JSON.stringify(cocosSettings)}`);
+        for (let script of cocosSettings.scripting.scriptPackages) {
+            let chunksFilename = script.replace("../", "");
+            html += yield insertScriptTagFromFile(path_1.default.join(buildDir, chunksFilename), chunksFilename);
+        }
+        return html;
+    });
 }
 function insertCocosJsDirTag(dirname) {
-    const filenames = walkFilesSync(dirname);
-    let html = "";
-    for (let filename of filenames) {
-        if (path_1.default.extname(filename) == ".js")
-            html += insertScriptTagFromFile(filename);
-    }
-    return html;
+    return __awaiter(this, void 0, void 0, function* () {
+        const filenames = walkFilesSync(dirname);
+        let html = "";
+        for (let filename of filenames) {
+            if (path_1.default.extname(filename) == ".js")
+                html += yield insertScriptTagFromFile(filename);
+        }
+        return html;
+    });
 }
 function insertApplicationTag(filename) {
-    let content = insertScriptTagFromFile(filename);
-    content = content.replace(`src/settings.json`, "");
-    content = content.replace(`src/effect.bin`, "");
-    content = content.replace(`cc = engine;`, `
+    return __awaiter(this, void 0, void 0, function* () {
+        let content = yield insertScriptTagFromFile(filename);
+        content = content.replace(`src/settings.json`, "");
+        content = content.replace(`src/effect.bin`, "");
+        content = content.replace(`cc = engine;`, `
     cc = engine;
     System.import("chunks:///downloadHandle.js");
     cc.settings._settings = window.cocosSettings;
     // cc.effectSettings._data = ArrayBuffer;
     `);
-    return content;
+        return content;
+    });
 }
 function packSingleHtml(buildDir) {
-    const wasmText = packWasmFiles(path_1.default.join(buildDir, "cocos-js"));
-    let htmlTags = insertScriptTag(wasmText);
-    const assetsText = packAssets(path_1.default.join(buildDir, "assets"), buildDir);
-    htmlTags += insertScriptTag(assetsText);
-    htmlTags += insertScriptTagFromFile(path_1.default.join(buildDir, "src", "polyfills.bundle.js"));
-    htmlTags += insertScriptTagFromFile(path_1.default.join(buildDir, "src", "system.bundle.js"));
-    htmlTags += insertSettingsConfigTag(path_1.default.join(buildDir, "src", "settings.json"), buildDir);
-    htmlTags += insertImportMapTag(path_1.default.join(buildDir, "src", "import-map.json"));
-    htmlTags += insertCocosJsDirTag(path_1.default.join(buildDir, "cocos-js"));
-    htmlTags += insertScriptTagFromDir(path_1.default.join(path_1.default.dirname(__dirname), "assets"));
-    htmlTags += insertApplicationTag(path_1.default.join(buildDir, "application.js"));
-    htmlTags += insertScriptTagFromFile(path_1.default.join(buildDir, "index.js"));
-    // polyfills脚本在内嵌以后，会导致System不会自动import，需要手动import一下。
-    htmlTags += insertScriptTag("System.import(\"cc\", \"chunks:///cc.js\");\nSystem.import(\"chunks:///index.js\");");
-    const indexHtmlPath = path_1.default.join(buildDir, 'index.html');
-    let html = fs_1.default.readFileSync(indexHtmlPath, 'utf-8');
-    html = removeAllScriptTags(html);
-    html = removeAllComments(html);
-    html = packCssFile(html, buildDir);
-    html = html.slice(0, html.lastIndexOf('</body>'));
-    html += htmlTags;
-    html += `\n</body>\n</html>`;
-    fs_1.default.writeFileSync(`${buildDir}/indexMerge.html`, html, "utf8");
+    return __awaiter(this, void 0, void 0, function* () {
+        const wasmText = packWasmFiles(path_1.default.join(buildDir, "cocos-js"));
+        let htmlTags = yield insertScriptTag(wasmText);
+        const assetsText = packAssets(path_1.default.join(buildDir, "assets"), buildDir);
+        htmlTags += yield insertScriptTag(assetsText);
+        htmlTags += yield insertScriptTagFromFile(path_1.default.join(buildDir, "src", "polyfills.bundle.js"));
+        htmlTags += yield insertScriptTagFromFile(path_1.default.join(buildDir, "src", "system.bundle.js"));
+        htmlTags += yield insertSettingsConfigTag(path_1.default.join(buildDir, "src", "settings.json"), buildDir);
+        htmlTags += yield insertImportMapTag(path_1.default.join(buildDir, "src", "import-map.json"));
+        htmlTags += yield insertCocosJsDirTag(path_1.default.join(buildDir, "cocos-js"));
+        // htmlTags += await insertScriptTagFromDir(path.join(path.dirname(__dirname), "assets"));
+        htmlTags += yield insertScriptTagFromFile(path_1.default.join(path_1.default.dirname(__dirname), "assets", "downloadHandle.js"));
+        htmlTags += yield insertApplicationTag(path_1.default.join(buildDir, "application.js"));
+        htmlTags += yield insertScriptTagFromFile(path_1.default.join(buildDir, "index.js"));
+        // polyfills脚本在内嵌以后，会导致System不会自动import，需要手动import一下。
+        htmlTags += yield insertScriptTag("System.import(\"cc\", \"chunks:///cc.js\");\nSystem.import(\"chunks:///index.js\");");
+        let plusHtml = `\n<script>\n${fs_1.default.readFileSync(path_1.default.join(path_1.default.dirname(__dirname), "node_modules", "lzma", "src", "lzma-d-min.js"), 'utf8')}\n</script>`;
+        // plusHtml += `\n<script>\n${fs.readFileSync(path.join(path.dirname(__dirname), "node_modules", "xxtea-node", "lib", "xxtea.js"), 'utf8')}\n</script>`;
+        plusHtml += `\n<script>\n${fs_1.default.readFileSync(path_1.default.join(path_1.default.dirname(__dirname), "assets", "encoder.js"), 'utf8')}\n</script>`;
+        const indexHtmlPath = path_1.default.join(buildDir, 'index.html');
+        let html = fs_1.default.readFileSync(indexHtmlPath, 'utf-8');
+        html = removeAllScriptTags(html);
+        html = removeAllComments(html);
+        html = packCssFile(html, buildDir);
+        // replace head
+        html = html.replace(/<\/head>/, `${plusHtml}</head>`);
+        html = html.slice(0, html.lastIndexOf('</body>'));
+        html += htmlTags;
+        html += `\n</body>\n</html>`;
+        fs_1.default.writeFileSync(`${buildDir}/indexMerge.html`, html, "utf8");
+    });
 }
 exports.packSingleHtml = packSingleHtml;

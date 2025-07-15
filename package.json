@@ -16,7 +16,8 @@
     },
     "dependencies": {
         "fs-extra": "^10.0.0",
-        "lzma": "^2.3.2"
+        "lzma": "^2.3.2",
+        "xxtea-node": "^1.1.5"
     },
     "devDependencies": {
         "@cocos/creator-types": "^3.8.2",

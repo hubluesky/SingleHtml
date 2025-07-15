@@ -1,6 +1,8 @@
 import fs from "fs";
 import path from "path";
 import { ISettings } from "../@types";
+import { compress } from "lzma";
+import { encrypt } from "xxtea-node";
 
 const txtSuffixes = ['.txt', '.xml', '.vsh', '.fsh', '.atlas', '.tmx', '.tsx', '.json', '.ExportJson', '.plist', '.fnt', '.rt', '.mtl', '.pmtl', '.prefab', '.log'];
 const scriptSuffixes = ['.js', '.effect', 'chunk'];
@@ -58,7 +60,6 @@ function updateSystemJsSign(js: string, importName: string): string {
   return js.replace(`System.register([`, `System.register("chunks:///${importName}",[`);
 }
 
-
 function removeAllComments(html: string): string {
   return html.replace(/<!--[\s\S]*?-->/g, "").replace(/\n\s*\n/g, '\n');
 }
@@ -79,31 +80,62 @@ function packCssFile(html: string, buildDir: string): string {
   });
 }
 
-function insertScriptTag(content: string, type?: string) {
-  return `\n<script${type ? ` type="${type}"` : ""} charset="utf-8">\n${content}\n</script>`;
+// function insertScriptTag(content: string, type?: string) {
+//   return `\n<script${type ? ` type="${type}"` : ""} charset="utf-8">\n${content}\n</script>`;
+// }
+
+function uint8ToUtf16(u8arr: Uint8Array): string {
+  let result = '';
+  for (let i = 0; i < u8arr.length; i += 2) {
+    const code = (u8arr[i] << 8) | (u8arr[i + 1] ?? 0);
+    result += String.fromCharCode(code);
+  }
+  return result;
 }
 
-function insertScriptTagFromFile(filename: string, chunkName?: string, type?: string) {
+function xxteaEncryptBytes(data: Uint8Array, key: string): Uint8Array {
+  const encrypted = encrypt(data, Buffer.from(key));
+  return new Uint8Array(encrypted);
+}
+
+async function compressAndEncrypt(content: string, key: string = "default-xxtea-key"): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const inputBytes = Buffer.from(content, 'utf-8');
+    compress(inputBytes, 1, (lzmaBytes: Uint8Array, error: Error | null) => {
+      if (error) return reject(error);
+      const encrypted = xxteaEncryptBytes(lzmaBytes, key);
+      const utf16Str = uint8ToUtf16(encrypted);
+      resolve(utf16Str);
+    });
+  });
+}
+
+async function insertScriptTag(content: string, key: string = "default-xxtea-key"): Promise<string> {
+  const utf16 = await compressAndEncrypt(content, key);
+  return `<script type="application/xxtea-lzma-utf16" charset="utf-16" data-decrypt="true">\n${utf16}\n</script>`;
+}
+
+function insertScriptTagFromFile(filename: string, chunkName?: string, type?: string): Promise<string> {
   let content = fs.readFileSync(filename, "utf8");
   content = updateSystemJsSign(content, chunkName ?? path.basename(filename));
   return insertScriptTag(content, type);
 }
 
-function insertScriptTagFromDir(dirname: string): string {
-  const filenames = walkFilesSync(dirname);
-  let html = "";
-  for (let filename of filenames)
-    html += insertScriptTagFromFile(filename);
-  return html;
-}
+// async function insertScriptTagFromDir(dirname: string): Promise<string> {
+//   const filenames = walkFilesSync(dirname);
+//   let html = "";
+//   for (let filename of filenames)
+//     html += await insertScriptTagFromFile(filename);
+//   return html;
+// }
 
-function insertImportMapTag(filename: string): string {
+function insertImportMapTag(filename: string): Promise<string> {
   let content = fs.readFileSync(filename, { encoding: "utf8" });
   content = content.replace(`./../cocos-js/cc.js`, "chunks:///cc.js");
   return insertScriptTag(content, "systemjs-importmap");
 }
 
-function insertSettingsConfigTag(filename: string, buildDir: string): string {
+async function insertSettingsConfigTag(filename: string, buildDir: string): Promise<string> {
   let content = fs.readFileSync(filename, { encoding: "utf8" });
   let cocosSettings: ISettings = JSON.parse(content);
   if (cocosSettings.splashScreen != null) {
@@ -112,27 +144,27 @@ function insertSettingsConfigTag(filename: string, buildDir: string): string {
       cocosSettings.splashScreen.logo.base64 = "";
   }
 
-  let html = insertScriptTag(`cocosSettings=${JSON.stringify(cocosSettings)}`);
+  let html = await insertScriptTag(`cocosSettings=${JSON.stringify(cocosSettings)}`);
 
   for (let script of cocosSettings.scripting.scriptPackages) {
     let chunksFilename = script.replace("../", "");
-    html += insertScriptTagFromFile(path.join(buildDir, chunksFilename), chunksFilename);
+    html += await insertScriptTagFromFile(path.join(buildDir, chunksFilename), chunksFilename);
   }
   return html;
 }
 
-function insertCocosJsDirTag(dirname: string): string {
+async function insertCocosJsDirTag(dirname: string): Promise<string> {
   const filenames = walkFilesSync(dirname);
   let html = "";
   for (let filename of filenames) {
     if (path.extname(filename) == ".js")
-      html += insertScriptTagFromFile(filename);
+      html += await insertScriptTagFromFile(filename);
   }
   return html;
 }
 
-function insertApplicationTag(filename: string): string {
-  let content = insertScriptTagFromFile(filename);
+async function insertApplicationTag(filename: string): Promise<string> {
+  let content = await insertScriptTagFromFile(filename);
   content = content.replace(`src/settings.json`, "");
   content = content.replace(`src/effect.bin`, "");
   content = content.replace(`cc = engine;`, `
@@ -144,31 +176,39 @@ function insertApplicationTag(filename: string): string {
   return content;
 }
 
-export function packSingleHtml(buildDir: string): void {
+export async function packSingleHtml(buildDir: string): Promise<void> {
   const wasmText = packWasmFiles(path.join(buildDir, "cocos-js"));
-  let htmlTags = insertScriptTag(wasmText);
+  let htmlTags = await insertScriptTag(wasmText);
   const assetsText = packAssets(path.join(buildDir, "assets"), buildDir);
-  htmlTags += insertScriptTag(assetsText);
+  htmlTags += await insertScriptTag(assetsText);
 
-  htmlTags += insertScriptTagFromFile(path.join(buildDir, "src", "polyfills.bundle.js"));
-  htmlTags += insertScriptTagFromFile(path.join(buildDir, "src", "system.bundle.js"));
-  htmlTags += insertSettingsConfigTag(path.join(buildDir, "src", "settings.json"), buildDir);
-  htmlTags += insertImportMapTag(path.join(buildDir, "src", "import-map.json"));
+  htmlTags += await insertScriptTagFromFile(path.join(buildDir, "src", "polyfills.bundle.js"));
+  htmlTags += await insertScriptTagFromFile(path.join(buildDir, "src", "system.bundle.js"));
+  htmlTags += await insertSettingsConfigTag(path.join(buildDir, "src", "settings.json"), buildDir);
+  htmlTags += await insertImportMapTag(path.join(buildDir, "src", "import-map.json"));
 
-  htmlTags += insertCocosJsDirTag(path.join(buildDir, "cocos-js"));
+  htmlTags += await insertCocosJsDirTag(path.join(buildDir, "cocos-js"));
 
-  htmlTags += insertScriptTagFromDir(path.join(path.dirname(__dirname), "assets"));
-  htmlTags += insertApplicationTag(path.join(buildDir, "application.js"));
-  htmlTags += insertScriptTagFromFile(path.join(buildDir, "index.js"));
+  // htmlTags += await insertScriptTagFromDir(path.join(path.dirname(__dirname), "assets"));
+  htmlTags += await insertScriptTagFromFile(path.join(path.dirname(__dirname), "assets", "downloadHandle.js"));
+
+  htmlTags += await insertApplicationTag(path.join(buildDir, "application.js"));
+  htmlTags += await insertScriptTagFromFile(path.join(buildDir, "index.js"));
 
   // polyfills脚本在内嵌以后，会导致System不会自动import，需要手动import一下。
-  htmlTags += insertScriptTag("System.import(\"cc\", \"chunks:///cc.js\");\nSystem.import(\"chunks:///index.js\");");
+  htmlTags += await insertScriptTag("System.import(\"cc\", \"chunks:///cc.js\");\nSystem.import(\"chunks:///index.js\");");
+
+  let plusHtml = `\n<script>\n${fs.readFileSync(path.join(path.dirname(__dirname), "node_modules", "lzma", "src", "lzma-d-min.js"), 'utf8')}\n</script>`;
+  // plusHtml += `\n<script>\n${fs.readFileSync(path.join(path.dirname(__dirname), "node_modules", "xxtea-node", "lib", "xxtea.js"), 'utf8')}\n</script>`;
+  plusHtml += `\n<script>\n${fs.readFileSync(path.join(path.dirname(__dirname), "assets", "encoder.js"), 'utf8')}\n</script>`;
 
   const indexHtmlPath = path.join(buildDir, 'index.html');
   let html = fs.readFileSync(indexHtmlPath, 'utf-8');
   html = removeAllScriptTags(html);
   html = removeAllComments(html);
   html = packCssFile(html, buildDir);
+  // replace head
+  html = html.replace(/<\/head>/, `${plusHtml}</head>`);
   html = html.slice(0, html.lastIndexOf('</body>'));
   html += htmlTags;
   html += `\n</body>\n</html>`;

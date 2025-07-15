@@ -68,7 +68,7 @@ const onAfterCompressSettings = function (options, result) {
 exports.onAfterCompressSettings = onAfterCompressSettings;
 const onAfterBuild = function (options, result) {
     return __awaiter(this, void 0, void 0, function* () {
-        (0, packSingleHtml_1.packSingleHtml)(result.dest);
+        yield (0, packSingleHtml_1.packSingleHtml)(result.dest);
         console.log(`${global_1.PACKAGE_NAME}_onAfterBuild`, result.dest);
     });
 };

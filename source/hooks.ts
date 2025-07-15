@@ -53,7 +53,7 @@ export const onAfterCompressSettings: BuildHook.onAfterCompressSettings = async 
 };
 
 export const onAfterBuild: BuildHook.onAfterBuild = async function (options: ITaskOptions, result: IBuildResult) {
-    packSingleHtml(result.dest);
+    await packSingleHtml(result.dest);
     console.log(`${PACKAGE_NAME}_onAfterBuild`, result.dest);
 };
 
