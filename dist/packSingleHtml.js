@@ -15,8 +15,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.packSingleHtml = void 0;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
-const lzma_1 = require("lzma");
 const xxtea_node_1 = require("xxtea-node");
+const lz_string_1 = require("lz-string");
 const txtSuffixes = ['.txt', '.xml', '.vsh', '.fsh', '.atlas', '.tmx', '.tsx', '.json', '.ExportJson', '.plist', '.fnt', '.rt', '.mtl', '.pmtl', '.prefab', '.log'];
 const scriptSuffixes = ['.js', '.effect', 'chunk'];
 function walkFilesSync(filePath) {
@@ -87,37 +87,34 @@ function packCssFile(html, buildDir) {
 // function insertScriptTag(content: string, type?: string) {
 //   return `\n<script${type ? ` type="${type}"` : ""} charset="utf-8">\n${content}\n</script>`;
 // }
-function uint8ToUtf16(u8arr) {
-    var _a;
-    let result = '';
-    for (let i = 0; i < u8arr.length; i += 2) {
-        const code = (u8arr[i] << 8) | ((_a = u8arr[i + 1]) !== null && _a !== void 0 ? _a : 0);
-        result += String.fromCharCode(code);
-    }
-    return result;
-}
 function xxteaEncryptBytes(data, key) {
     const encrypted = (0, xxtea_node_1.encrypt)(data, Buffer.from(key));
     return new Uint8Array(encrypted);
 }
-function compressAndEncrypt(content, key = "default-xxtea-key") {
+function insertScriptTag(content, type, key = "your-key") {
     return __awaiter(this, void 0, void 0, function* () {
-        return new Promise((resolve, reject) => {
-            const inputBytes = Buffer.from(content, 'utf-8');
-            (0, lzma_1.compress)(inputBytes, 1, (lzmaBytes, error) => {
-                if (error)
-                    return reject(error);
-                const encrypted = xxteaEncryptBytes(lzmaBytes, key);
-                const utf16Str = uint8ToUtf16(encrypted);
-                resolve(utf16Str);
-            });
-        });
-    });
-}
-function insertScriptTag(content, key = "default-xxtea-key") {
-    return __awaiter(this, void 0, void 0, function* () {
-        const utf16 = yield compressAndEncrypt(content, key);
-        return `<script type="application/xxtea-lzma-utf16" charset="utf-16" data-decrypt="true">\n${utf16}\n</script>`;
+        // const utf8 = Buffer.from(content, 'utf-8');
+        // const compressed = await new Promise<Uint8Array>((resolve, reject) => {
+        //   compress(utf8, 1, (out: Uint8Array, err: Error | null) => {
+        //     if (err) reject(err);
+        //     else resolve(out);
+        //   });
+        // });
+        // const encrypted = xxteaEncryptBytes(compressed, key);
+        // const utf16 = encode(compressed);
+        const utf16 = (0, lz_string_1.compressToUTF16)(content);
+        // const textutf8 = decode(utf16);
+        // console.log('insertScriptTag compressed:', content, compressed, utf16);
+        // const decompressd = await new Promise((resolve, reject) => {
+        //   decompress(textutf8, function (out: Uint8Array, err: Error | null) {
+        //     if (err) reject(err);
+        //     else resolve(out);
+        //   })
+        // });
+        // console.log('insertScriptTag textutf8:', textutf8, decompressd);
+        if (type == null)
+            return `<script type="application/xxtea-lzma-utf16" data-decrypt="true">${utf16}</script>`;
+        return `<script type="application/xxtea-lzma-utf16" data-decrypt="true" srctype="${type}">${utf16}</script>`;
     });
 }
 function insertScriptTagFromFile(filename, chunkName, type) {
@@ -167,7 +164,8 @@ function insertCocosJsDirTag(dirname) {
 }
 function insertApplicationTag(filename) {
     return __awaiter(this, void 0, void 0, function* () {
-        let content = yield insertScriptTagFromFile(filename);
+        let content = fs_1.default.readFileSync(filename, "utf8");
+        content = updateSystemJsSign(content, path_1.default.basename(filename));
         content = content.replace(`src/settings.json`, "");
         content = content.replace(`src/effect.bin`, "");
         content = content.replace(`cc = engine;`, `
@@ -176,13 +174,14 @@ function insertApplicationTag(filename) {
     cc.settings._settings = window.cocosSettings;
     // cc.effectSettings._data = ArrayBuffer;
     `);
-        return content;
+        return insertScriptTag(content);
     });
 }
 function packSingleHtml(buildDir) {
     return __awaiter(this, void 0, void 0, function* () {
         const wasmText = packWasmFiles(path_1.default.join(buildDir, "cocos-js"));
-        let htmlTags = yield insertScriptTag(wasmText);
+        let htmlTags = "";
+        htmlTags += yield insertScriptTag(wasmText);
         const assetsText = packAssets(path_1.default.join(buildDir, "assets"), buildDir);
         htmlTags += yield insertScriptTag(assetsText);
         htmlTags += yield insertScriptTagFromFile(path_1.default.join(buildDir, "src", "polyfills.bundle.js"));
@@ -190,15 +189,14 @@ function packSingleHtml(buildDir) {
         htmlTags += yield insertSettingsConfigTag(path_1.default.join(buildDir, "src", "settings.json"), buildDir);
         htmlTags += yield insertImportMapTag(path_1.default.join(buildDir, "src", "import-map.json"));
         htmlTags += yield insertCocosJsDirTag(path_1.default.join(buildDir, "cocos-js"));
-        // htmlTags += await insertScriptTagFromDir(path.join(path.dirname(__dirname), "assets"));
         htmlTags += yield insertScriptTagFromFile(path_1.default.join(path_1.default.dirname(__dirname), "assets", "downloadHandle.js"));
         htmlTags += yield insertApplicationTag(path_1.default.join(buildDir, "application.js"));
         htmlTags += yield insertScriptTagFromFile(path_1.default.join(buildDir, "index.js"));
         // polyfills脚本在内嵌以后，会导致System不会自动import，需要手动import一下。
         htmlTags += yield insertScriptTag("System.import(\"cc\", \"chunks:///cc.js\");\nSystem.import(\"chunks:///index.js\");");
-        let plusHtml = `\n<script>\n${fs_1.default.readFileSync(path_1.default.join(path_1.default.dirname(__dirname), "node_modules", "lzma", "src", "lzma-d-min.js"), 'utf8')}\n</script>`;
-        // plusHtml += `\n<script>\n${fs.readFileSync(path.join(path.dirname(__dirname), "node_modules", "xxtea-node", "lib", "xxtea.js"), 'utf8')}\n</script>`;
-        plusHtml += `\n<script>\n${fs_1.default.readFileSync(path_1.default.join(path_1.default.dirname(__dirname), "assets", "encoder.js"), 'utf8')}\n</script>`;
+        let plusHtml = `\n<script>${fs_1.default.readFileSync(path_1.default.join(path_1.default.dirname(__dirname), "node_modules", "lz-string", "libs", "lz-string.min.js"), 'utf8')}</script>`;
+        // let plusHtml = `\n<script>${fs.readFileSync(path.join(path.dirname(__dirname), "node_modules", "lzma", "src", "lzma-d-min.js"), 'utf8')}</script>`;
+        htmlTags += `\n<script>${fs_1.default.readFileSync(path_1.default.join(path_1.default.dirname(__dirname), "assets", "encoder.js"), 'utf8')}</script>`;
         const indexHtmlPath = path_1.default.join(buildDir, 'index.html');
         let html = fs_1.default.readFileSync(indexHtmlPath, 'utf-8');
         html = removeAllScriptTags(html);

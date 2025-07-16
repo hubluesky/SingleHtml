@@ -15,7 +15,9 @@
         "builder": "./dist/builder.js"
     },
     "dependencies": {
+        "base32768": "^5.0.0",
         "fs-extra": "^10.0.0",
+        "lz-string": "^1.5.0",
         "lzma": "^2.3.2",
         "xxtea-node": "^1.1.5"
     },

@@ -84,13 +84,11 @@ System.register("chunks:///downloadHandle.js", [], (function () {
   //-------------------------------------------------
 
   function downloadScript(url, options, onComplete) {
-    var d = document,
-      s = document.createElement('script');
-    s.type = "text/javascript";
-    s.charset = "utf-8";
-    s.setAttribute('type', 'text/javascript');
-    s.text = window.assetsMap[url];
-    d.body.appendChild(s);
+    var element = document.createElement('script');
+    element.setAttribute("charset", "utf-8");
+    element.setAttribute('type', 'text/javascript');
+    element.text = window.assetsMap[url];
+    document.body.appendChild(element);
     onComplete(null);
   }
 

@@ -1,8 +1,10 @@
 import fs from "fs";
 import path from "path";
 import { ISettings } from "../@types";
-import { compress } from "lzma";
+import { compress, decompress } from "lzma";
 import { encrypt } from "xxtea-node";
+import { encode, decode } from "base32768";
+import { compressToUTF16 } from "lz-string";
 
 const txtSuffixes = ['.txt', '.xml', '.vsh', '.fsh', '.atlas', '.tmx', '.tsx', '.json', '.ExportJson', '.plist', '.fnt', '.rt', '.mtl', '.pmtl', '.prefab', '.log'];
 const scriptSuffixes = ['.js', '.effect', 'chunk'];
@@ -84,36 +86,35 @@ function packCssFile(html: string, buildDir: string): string {
 //   return `\n<script${type ? ` type="${type}"` : ""} charset="utf-8">\n${content}\n</script>`;
 // }
 
-function uint8ToUtf16(u8arr: Uint8Array): string {
-  let result = '';
-  for (let i = 0; i < u8arr.length; i += 2) {
-    const code = (u8arr[i] << 8) | (u8arr[i + 1] ?? 0);
-    result += String.fromCharCode(code);
-  }
-  return result;
-}
-
 function xxteaEncryptBytes(data: Uint8Array, key: string): Uint8Array {
   const encrypted = encrypt(data, Buffer.from(key));
   return new Uint8Array(encrypted);
 }
 
-async function compressAndEncrypt(content: string, key: string = "default-xxtea-key"): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const inputBytes = Buffer.from(content, 'utf-8');
-    compress(inputBytes, 1, (lzmaBytes: Uint8Array, error: Error | null) => {
-      if (error) return reject(error);
-      const encrypted = xxteaEncryptBytes(lzmaBytes, key);
-      const utf16Str = uint8ToUtf16(encrypted);
-      resolve(utf16Str);
-    });
-  });
+async function insertScriptTag(content: string, type?: string, key: string = "your-key"): Promise<string> {
+  // const utf8 = Buffer.from(content, 'utf-8');
+  // const compressed = await new Promise<Uint8Array>((resolve, reject) => {
+  //   compress(utf8, 1, (out: Uint8Array, err: Error | null) => {
+  //     if (err) reject(err);
+  //     else resolve(out);
+  //   });
+  // });
+  // const encrypted = xxteaEncryptBytes(compressed, key);
+  // const utf16 = encode(compressed);
+  const utf16 = compressToUTF16(content);
+  // const textutf8 = decode(utf16);
+  // console.log('insertScriptTag compressed:', content, compressed, utf16);
+  // const decompressd = await new Promise((resolve, reject) => {
+  //   decompress(textutf8, function (out: Uint8Array, err: Error | null) {
+  //     if (err) reject(err);
+  //     else resolve(out);
+  //   })
+  // });
+  // console.log('insertScriptTag textutf8:', textutf8, decompressd);
+  if (type == null) return `<script type="application/xxtea-lzma-utf16" data-decrypt="true">${utf16}</script>`;
+  return `<script type="application/xxtea-lzma-utf16" data-decrypt="true" srctype="${type}">${utf16}</script>`;
 }
 
-async function insertScriptTag(content: string, key: string = "default-xxtea-key"): Promise<string> {
-  const utf16 = await compressAndEncrypt(content, key);
-  return `<script type="application/xxtea-lzma-utf16" charset="utf-16" data-decrypt="true">\n${utf16}\n</script>`;
-}
 
 function insertScriptTagFromFile(filename: string, chunkName?: string, type?: string): Promise<string> {
   let content = fs.readFileSync(filename, "utf8");
@@ -164,7 +165,8 @@ async function insertCocosJsDirTag(dirname: string): Promise<string> {
 }
 
 async function insertApplicationTag(filename: string): Promise<string> {
-  let content = await insertScriptTagFromFile(filename);
+  let content = fs.readFileSync(filename, "utf8");
+  content = updateSystemJsSign(content, path.basename(filename));
   content = content.replace(`src/settings.json`, "");
   content = content.replace(`src/effect.bin`, "");
   content = content.replace(`cc = engine;`, `
@@ -173,12 +175,13 @@ async function insertApplicationTag(filename: string): Promise<string> {
     cc.settings._settings = window.cocosSettings;
     // cc.effectSettings._data = ArrayBuffer;
     `);
-  return content;
+  return insertScriptTag(content);
 }
 
 export async function packSingleHtml(buildDir: string): Promise<void> {
   const wasmText = packWasmFiles(path.join(buildDir, "cocos-js"));
-  let htmlTags = await insertScriptTag(wasmText);
+  let htmlTags = "";
+  htmlTags += await insertScriptTag(wasmText);
   const assetsText = packAssets(path.join(buildDir, "assets"), buildDir);
   htmlTags += await insertScriptTag(assetsText);
 
@@ -189,7 +192,6 @@ export async function packSingleHtml(buildDir: string): Promise<void> {
 
   htmlTags += await insertCocosJsDirTag(path.join(buildDir, "cocos-js"));
 
-  // htmlTags += await insertScriptTagFromDir(path.join(path.dirname(__dirname), "assets"));
   htmlTags += await insertScriptTagFromFile(path.join(path.dirname(__dirname), "assets", "downloadHandle.js"));
 
   htmlTags += await insertApplicationTag(path.join(buildDir, "application.js"));
@@ -198,9 +200,9 @@ export async function packSingleHtml(buildDir: string): Promise<void> {
   // polyfills脚本在内嵌以后，会导致System不会自动import，需要手动import一下。
   htmlTags += await insertScriptTag("System.import(\"cc\", \"chunks:///cc.js\");\nSystem.import(\"chunks:///index.js\");");
 
-  let plusHtml = `\n<script>\n${fs.readFileSync(path.join(path.dirname(__dirname), "node_modules", "lzma", "src", "lzma-d-min.js"), 'utf8')}\n</script>`;
-  // plusHtml += `\n<script>\n${fs.readFileSync(path.join(path.dirname(__dirname), "node_modules", "xxtea-node", "lib", "xxtea.js"), 'utf8')}\n</script>`;
-  plusHtml += `\n<script>\n${fs.readFileSync(path.join(path.dirname(__dirname), "assets", "encoder.js"), 'utf8')}\n</script>`;
+  let plusHtml = `\n<script>${fs.readFileSync(path.join(path.dirname(__dirname), "node_modules", "lz-string", "libs", "lz-string.min.js"), 'utf8')}</script>`;
+  // let plusHtml = `\n<script>${fs.readFileSync(path.join(path.dirname(__dirname), "node_modules", "lzma", "src", "lzma-d-min.js"), 'utf8')}</script>`;
+  htmlTags += `\n<script>${fs.readFileSync(path.join(path.dirname(__dirname), "assets", "encoder.js"), 'utf8')}</script>`;
 
   const indexHtmlPath = path.join(buildDir, 'index.html');
   let html = fs.readFileSync(indexHtmlPath, 'utf-8');
