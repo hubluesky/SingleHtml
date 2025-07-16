@@ -206,8 +206,8 @@
     }
 
     function decompress(data, callback) {
-        // LZMA.decompress(data, callback);
-        callback(LZString.decompressFromUTF16(data));
+        LZMA.decompress(data, callback);
+        // callback(LZString.decompressFromUTF16(data));
     }
 
     function exec(code, type) {
@@ -226,11 +226,11 @@
         if (queue.length === 0) return;
         const tag = queue.shift();
         const type = tag.getAttribute("srctype");
-        // const u8 = decode(tag.textContent);
+        const u8 = decode(tag.textContent);
         tag.remove();
         // const dec = decrypt(u8);
-        decompress(tag.textContent, (code, err) => {
-            // if (err) console.error("decompress: " + err);
+        decompress(u8, (code, err) => {
+            if (err) console.error("decompress: " + err);
             exec(code, type);
             next();
         });

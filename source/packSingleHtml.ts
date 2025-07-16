@@ -92,16 +92,15 @@ function xxteaEncryptBytes(data: Uint8Array, key: string): Uint8Array {
 }
 
 async function insertScriptTag(content: string, type?: string, key: string = "your-key"): Promise<string> {
-  // const utf8 = Buffer.from(content, 'utf-8');
-  // const compressed = await new Promise<Uint8Array>((resolve, reject) => {
-  //   compress(utf8, 1, (out: Uint8Array, err: Error | null) => {
-  //     if (err) reject(err);
-  //     else resolve(out);
-  //   });
-  // });
+  const compressed = await new Promise<Uint8Array>((resolve, reject) => {
+    compress(content, 1, (out: Uint8Array, err: Error | null) => {
+      if (err) reject(err);
+      else resolve(out);
+    });
+  });
   // const encrypted = xxteaEncryptBytes(compressed, key);
-  // const utf16 = encode(compressed);
-  const utf16 = compressToUTF16(content);
+  const utf16 = encode(compressed);
+  // const utf16 = compressToUTF16(content);
   // const textutf8 = decode(utf16);
   // console.log('insertScriptTag compressed:', content, compressed, utf16);
   // const decompressd = await new Promise((resolve, reject) => {
@@ -200,8 +199,8 @@ export async function packSingleHtml(buildDir: string): Promise<void> {
   // polyfills脚本在内嵌以后，会导致System不会自动import，需要手动import一下。
   htmlTags += await insertScriptTag("System.import(\"cc\", \"chunks:///cc.js\");\nSystem.import(\"chunks:///index.js\");");
 
-  let plusHtml = `\n<script>${fs.readFileSync(path.join(path.dirname(__dirname), "node_modules", "lz-string", "libs", "lz-string.min.js"), 'utf8')}</script>`;
-  // let plusHtml = `\n<script>${fs.readFileSync(path.join(path.dirname(__dirname), "node_modules", "lzma", "src", "lzma-d-min.js"), 'utf8')}</script>`;
+  // let plusHtml = `\n<script>${fs.readFileSync(path.join(path.dirname(__dirname), "node_modules", "lz-string", "libs", "lz-string.min.js"), 'utf8')}</script>`;
+  let plusHtml = `\n<script>${fs.readFileSync(path.join(path.dirname(__dirname), "node_modules", "lzma", "src", "lzma-d-min.js"), 'utf8')}</script>`;
   htmlTags += `\n<script>${fs.readFileSync(path.join(path.dirname(__dirname), "assets", "encoder.js"), 'utf8')}</script>`;
 
   const indexHtmlPath = path.join(buildDir, 'index.html');

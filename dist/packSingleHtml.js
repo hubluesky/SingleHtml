@@ -15,8 +15,9 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.packSingleHtml = void 0;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
+const lzma_1 = require("lzma");
 const xxtea_node_1 = require("xxtea-node");
-const lz_string_1 = require("lz-string");
+const base32768_1 = require("base32768");
 const txtSuffixes = ['.txt', '.xml', '.vsh', '.fsh', '.atlas', '.tmx', '.tsx', '.json', '.ExportJson', '.plist', '.fnt', '.rt', '.mtl', '.pmtl', '.prefab', '.log'];
 const scriptSuffixes = ['.js', '.effect', 'chunk'];
 function walkFilesSync(filePath) {
@@ -93,16 +94,17 @@ function xxteaEncryptBytes(data, key) {
 }
 function insertScriptTag(content, type, key = "your-key") {
     return __awaiter(this, void 0, void 0, function* () {
-        // const utf8 = Buffer.from(content, 'utf-8');
-        // const compressed = await new Promise<Uint8Array>((resolve, reject) => {
-        //   compress(utf8, 1, (out: Uint8Array, err: Error | null) => {
-        //     if (err) reject(err);
-        //     else resolve(out);
-        //   });
-        // });
+        const compressed = yield new Promise((resolve, reject) => {
+            (0, lzma_1.compress)(content, 1, (out, err) => {
+                if (err)
+                    reject(err);
+                else
+                    resolve(out);
+            });
+        });
         // const encrypted = xxteaEncryptBytes(compressed, key);
-        // const utf16 = encode(compressed);
-        const utf16 = (0, lz_string_1.compressToUTF16)(content);
+        const utf16 = (0, base32768_1.encode)(compressed);
+        // const utf16 = compressToUTF16(content);
         // const textutf8 = decode(utf16);
         // console.log('insertScriptTag compressed:', content, compressed, utf16);
         // const decompressd = await new Promise((resolve, reject) => {
@@ -194,8 +196,8 @@ function packSingleHtml(buildDir) {
         htmlTags += yield insertScriptTagFromFile(path_1.default.join(buildDir, "index.js"));
         // polyfills脚本在内嵌以后，会导致System不会自动import，需要手动import一下。
         htmlTags += yield insertScriptTag("System.import(\"cc\", \"chunks:///cc.js\");\nSystem.import(\"chunks:///index.js\");");
-        let plusHtml = `\n<script>${fs_1.default.readFileSync(path_1.default.join(path_1.default.dirname(__dirname), "node_modules", "lz-string", "libs", "lz-string.min.js"), 'utf8')}</script>`;
-        // let plusHtml = `\n<script>${fs.readFileSync(path.join(path.dirname(__dirname), "node_modules", "lzma", "src", "lzma-d-min.js"), 'utf8')}</script>`;
+        // let plusHtml = `\n<script>${fs.readFileSync(path.join(path.dirname(__dirname), "node_modules", "lz-string", "libs", "lz-string.min.js"), 'utf8')}</script>`;
+        let plusHtml = `\n<script>${fs_1.default.readFileSync(path_1.default.join(path_1.default.dirname(__dirname), "node_modules", "lzma", "src", "lzma-d-min.js"), 'utf8')}</script>`;
         htmlTags += `\n<script>${fs_1.default.readFileSync(path_1.default.join(path_1.default.dirname(__dirname), "assets", "encoder.js"), 'utf8')}</script>`;
         const indexHtmlPath = path_1.default.join(buildDir, 'index.html');
         let html = fs_1.default.readFileSync(indexHtmlPath, 'utf-8');
